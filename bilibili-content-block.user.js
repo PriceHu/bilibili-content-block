@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliBili Content Block
 // @namespace    https://github.com/PriceHu/bilibili-content-block
-// @version      1.0.0
+// @version      1.0.1
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
 // @license      MIT
@@ -54,7 +54,9 @@
             item: '.bili-video-card',
             title: '.bili-video-card__info--tit a, .bili-video-card__info--tit, .bili-video-card__title',
             media: '.bili-video-card__cover img, .bili-video-card__image--wrap img',
-            user: '.bili-video-card__info--author, .bili-video-card__info--author-name'
+            user: '.bili-video-card__info--author, .bili-video-card__info--author-name, .bili-video-card__author .bili-video-card__text'
+            // TODO space video card author not fully compatible
+            // The full string is "Author · 收藏于xxx"
         },
         {
             item: '.video-page-card-small',
