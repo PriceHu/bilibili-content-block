@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         BiliBili Content Block
-// @namespace    local.bilibili-content-block
+// @namespace    https://github.com/PriceHu/bilibili-content-block
 // @version      1.0.0
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
+// @author       PriceHu
 // @match        https://*.bilibili.com/*
 // @match        https://bilibili.com/*
 // @match        http://*.bilibili.com/*

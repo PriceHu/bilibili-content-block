@@ -18,7 +18,7 @@ Created by GPT 5.6 Luna and Terra.
 ## Installation
 
 1. Install a userscript manager such as Tampermonkey or Violentmonkey.
-2. Open `bilibili-content-block.user.js` in the userscript manager.
+2. [Click to install BiliBili Content Block](https://raw.githubusercontent.com/PriceHu/bilibili-content-block/main/bilibili-content-block.user.js) or open `bilibili-content-block.user.js` in the userscript manager.
 3. Install or enable the script.
 4. Open a supported BiliBili page and use the vertical **CONTENT BLOCKER** button to configure rules.
 
