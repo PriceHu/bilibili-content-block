@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliBili Content Block
 // @namespace    https://github.com/PriceHu/bilibili-content-block
-// @version      1.0.1
+// @version      1.1.0
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
 // @license      MIT
@@ -125,8 +125,11 @@
     let toggleButton;
     let scanQueued = false;
     let activeListName = null;
+    let draggedEntry = null;
     let appliedBlur = new Map();
     const listFilters = Object.create(null);
+    const entryMeasureCanvas = document.createElement('canvas');
+    const entryMeasureContext = entryMeasureCanvas.getContext('2d');
 
     function entry(source, enabled = true) {
         return { source, enabled };
@@ -333,6 +336,39 @@
         return element;
     }
 
+    function measureEntryText(input) {
+        const styles = getComputedStyle(input);
+        if (entryMeasureContext) {
+            entryMeasureContext.font = `${styles.fontStyle} ${styles.fontWeight} ${styles.fontSize} ${styles.fontFamily}`;
+            return entryMeasureContext.measureText(input.value).width;
+        }
+        return input.value.length * Number.parseFloat(styles.fontSize || '12');
+    }
+
+    function resizeEntryInputs(list) {
+        if (!list || !list.clientWidth) return;
+        list.querySelectorAll('.bcb-entry-row').forEach((row) => {
+            const input = row.querySelector('input[type="text"]');
+            const checkbox = row.querySelector('input[type="checkbox"]');
+            const remove = row.querySelector('.bcb-remove-entry');
+            if (!input || !checkbox || !remove) return;
+            const rowStyles = getComputedStyle(row);
+            const gap = Number.parseFloat(rowStyles.columnGap || rowStyles.gap) || 0;
+            const fixedWidth = checkbox.offsetWidth + remove.offsetWidth + (gap * 2)
+                + Number.parseFloat(rowStyles.paddingLeft)
+                + Number.parseFloat(rowStyles.paddingRight)
+                + Number.parseFloat(rowStyles.borderLeftWidth)
+                + Number.parseFloat(rowStyles.borderRightWidth);
+            const maxWidth = Math.max(24, list.clientWidth - fixedWidth);
+            const inputStyles = getComputedStyle(input);
+            const textWidth = measureEntryText(input)
+                + Number.parseFloat(inputStyles.paddingLeft)
+                + Number.parseFloat(inputStyles.paddingRight)
+                + 2;
+            input.style.width = `${Math.min(textWidth, maxWidth)}px`;
+        });
+    }
+
     function renderPatternList(listName, includeHeading = true) {
         const metadata = BLOCK_TYPE_META[listName];
         const section = createElement('section', 'bcb-list-section');
@@ -368,6 +404,10 @@
         matchingEntries.forEach(({ item, index }) => {
             const row = createElement('div', 'bcb-entry-row');
             row.dataset.entrySource = item.source;
+            row.dataset.list = listName;
+            row.dataset.index = String(index);
+            row.draggable = true;
+            row.title = 'Drag to reorder';
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = item.enabled;
@@ -375,6 +415,7 @@
             checkbox.dataset.list = listName;
             checkbox.dataset.index = String(index);
             checkbox.title = 'Enable entry';
+            checkbox.draggable = false;
             row.append(checkbox);
 
             const input = document.createElement('input');
@@ -385,6 +426,7 @@
             input.dataset.index = String(index);
             input.className = item.invalid ? 'bcb-invalid' : '';
             input.setAttribute('aria-label', `${metadata.title} regex ${index + 1}`);
+            input.draggable = false;
             row.append(input);
 
             const remove = document.createElement('button');
@@ -396,6 +438,7 @@
             remove.title = 'Remove entry';
             remove.setAttribute('aria-label', 'Remove entry');
             remove.innerHTML = ICONS.trash;
+            remove.draggable = false;
             row.append(remove);
             list.append(row);
         });
@@ -469,6 +512,7 @@
         document.querySelector('#bcb-management-description').textContent = metadata.description;
         document.querySelector('#bcb-management-count').textContent = `${config[activeListName].length} total`;
         content.replaceChildren(renderPatternList(activeListName, false));
+        resizeEntryInputs(content.querySelector('.bcb-entry-list'));
     }
 
     function renderPanel() {
@@ -527,6 +571,10 @@
             renderPanel();
             return;
         }
+        if (event.target.dataset.action === 'edit-entry') {
+            resizeEntryInputs(event.target.closest('.bcb-entry-list'));
+            return;
+        }
         if (event.target.id !== 'bcb-vertical') return;
         config.vertical = Number(event.target.value);
         document.querySelector('#bcb-vertical-value').textContent = `${config.vertical}%`;
@@ -557,6 +605,54 @@
             renderPanel();
             queueScan();
         }
+    }
+
+    function clearDragState() {
+        draggedEntry = null;
+        panel.querySelectorAll('.bcb-dragging, .bcb-drag-over').forEach((row) => {
+            row.classList.remove('bcb-dragging', 'bcb-drag-over');
+        });
+    }
+
+    function handlePanelDragStart(event) {
+        const row = event.target.closest('.bcb-entry-row');
+        if (!row) return;
+        draggedEntry = {
+            listName: row.dataset.list,
+            index: Number(row.dataset.index)
+        };
+        row.classList.add('bcb-dragging');
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', `${draggedEntry.listName}:${draggedEntry.index}`);
+    }
+
+    function handlePanelDragOver(event) {
+        if (!draggedEntry) return;
+        const row = event.target.closest('.bcb-entry-row');
+        if (!row || row.dataset.list !== draggedEntry.listName) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'move';
+        panel.querySelectorAll('.bcb-drag-over').forEach((item) => item.classList.remove('bcb-drag-over'));
+        row.classList.add('bcb-drag-over');
+    }
+
+    function handlePanelDrop(event) {
+        if (!draggedEntry) return;
+        const row = event.target.closest('.bcb-entry-row');
+        if (!row || row.dataset.list !== draggedEntry.listName) return;
+        event.preventDefault();
+
+        const list = config[draggedEntry.listName];
+        const targetIndex = Number(row.dataset.index);
+        const rowBounds = row.getBoundingClientRect();
+        const insertAfter = event.clientX > rowBounds.left + rowBounds.width / 2;
+        let destinationIndex = targetIndex + (insertAfter ? 1 : 0);
+        const [movedEntry] = list.splice(draggedEntry.index, 1);
+        if (draggedEntry.index < destinationIndex) destinationIndex -= 1;
+        list.splice(destinationIndex, 0, movedEntry);
+        saveConfig();
+        clearDragState();
+        renderPanel();
     }
 
     function handleAdd(event) {
@@ -631,6 +727,10 @@
         panel.addEventListener('change', handlePanelChange);
         panel.addEventListener('input', handlePanelInput);
         panel.addEventListener('submit', handleAdd);
+        panel.addEventListener('dragstart', handlePanelDragStart);
+        panel.addEventListener('dragover', handlePanelDragOver);
+        panel.addEventListener('drop', handlePanelDrop);
+        panel.addEventListener('dragend', clearDragState);
         renderPanel();
         runtimeState.consoleInjected = true;
         runtimeState.dom = {
@@ -778,13 +878,20 @@
             .bcb-filter-row { margin-bottom: 7px; }
             .bcb-filter-row input { width: 100%; height: 29px; padding: 5px 8px; border: 1px solid var(--bcb-line); border-radius: 5px; color: var(--bcb-ink); background: var(--bcb-surface); font: 12px/1.2 "Segoe UI", "Microsoft YaHei", sans-serif; }
             .bcb-filter-row input:focus { outline: 2px solid var(--bcb-focus); border-color: var(--bcb-accent); }
-            .bcb-entry-list { display: grid; gap: 6px; max-height: 220px; overflow-y: auto; padding: 1px 3px 1px 0; }
-            .bcb-empty-list { padding: 10px 0; color: var(--bcb-muted); font-size: 12px; text-align: center; }
+            .bcb-entry-list { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 6px; max-height: 220px; overflow-y: auto; padding: 1px 3px 1px 0; }
+            .bcb-empty-list { flex: 1 0 100%; padding: 10px 0; color: var(--bcb-muted); font-size: 12px; text-align: center; }
             .bcb-entry-row, .bcb-add-row { display: flex; gap: 7px; align-items: center; }
-            .bcb-entry-row input[type="text"], .bcb-add-row input { min-width: 0; flex: 1; height: 31px; padding: 5px 8px; border: 1px solid var(--bcb-line); border-radius: 5px; color: var(--bcb-ink); background: var(--bcb-surface); font: 12px/1.2 Consolas, "Microsoft YaHei", monospace; }
+            .bcb-entry-row { flex: 0 1 auto; width: fit-content; max-width: 100%; min-height: 29px; padding: 1px 4px 1px 5px; border: 1px solid var(--bcb-line); border-radius: 999px; background: var(--bcb-surface); cursor: grab; transition: border-color .15s ease, background .15s ease, opacity .15s ease; }
+            .bcb-entry-row:hover { border-color: var(--bcb-accent); background: var(--bcb-surface-hover); }
+            .bcb-entry-row:active { cursor: grabbing; }
+            .bcb-entry-row.bcb-dragging { opacity: .5; }
+            .bcb-entry-row.bcb-drag-over { border-color: var(--bcb-accent); box-shadow: inset 0 0 0 1px var(--bcb-accent); }
+            .bcb-entry-row input[type="text"] { min-width: 0; max-width: 100%; flex: 0 1 auto; height: 25px; padding: 3px 4px; border: 0; border-radius: 4px; color: var(--bcb-ink); background: transparent; font: 12px/1.2 Consolas, "Microsoft YaHei", monospace; }
+            .bcb-add-row input { min-width: 0; flex: 1; height: 29px; padding: 5px 8px; border: 1px solid var(--bcb-line); border-radius: 5px; color: var(--bcb-ink); background: var(--bcb-surface); font: 12px/1.2 Consolas, "Microsoft YaHei", monospace; }
             .bcb-entry-row input[type="text"]:focus, .bcb-add-row input:focus { outline: 2px solid var(--bcb-focus); border-color: var(--bcb-accent); }
             .bcb-entry-row input[type="text"].bcb-invalid, .bcb-add-row input.bcb-invalid { border-color: var(--bcb-danger); background: var(--bcb-danger-surface); }
             .bcb-entry-row input[type="checkbox"] { accent-color: var(--bcb-accent); width: 15px; height: 15px; flex: 0 0 15px; margin: 0; }
+            .bcb-entry-row .bcb-icon-button { width: 26px; height: 26px; flex-basis: 26px; }
             .bcb-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--bcb-muted); cursor: pointer; flex: 0 0 30px; }
             .bcb-icon-button:hover { background: var(--bcb-surface-hover); color: var(--bcb-ink); }
             .bcb-remove-entry:hover { color: var(--bcb-danger); }

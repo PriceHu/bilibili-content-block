@@ -32,7 +32,7 @@ The settings panel provides three rule lists:
 - **Blocked Authors**: regular expressions matched against author names.
 - **Allowed Authors**: regular expressions that override other matches for the same content.
 
-Each entry can be enabled or disabled, edited, filtered, or removed. New entries are validated as JavaScript regular expressions before they are saved. Matching is case-insensitive and Unicode-aware.
+Each entry can be enabled or disabled, edited, filtered, reordered by dragging, or removed. New entries are validated as JavaScript regular expressions before they are saved. Matching is case-insensitive and Unicode-aware.
 
 Configuration is saved by the userscript manager under the key `bilibili-content-blur:v2`.
 
