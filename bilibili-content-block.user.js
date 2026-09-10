@@ -4,6 +4,7 @@
 // @version      1.0.0
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
+// @license      MIT
 // @match        https://*.bilibili.com/*
 // @match        https://bilibili.com/*
 // @match        http://*.bilibili.com/*
