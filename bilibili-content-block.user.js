@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliBili Content Block
 // @namespace    https://github.com/PriceHu/bilibili-content-block
-// @version      1.1.0
+// @version      1.2.0
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
 // @license      MIT
@@ -30,6 +30,7 @@
 
     const DEBUG_PREFIX = '[BiliBili Content Block]';
     const warnedInvalidEntries = new Set();
+    const warnedInvalidSelectors = new Set();
     const runtimeState = {
         sourceLoadedAt: new Date().toISOString(),
         href: location.href,
@@ -49,14 +50,12 @@
     const STORAGE_KEY = 'bilibili-content-blur:v2';
     const DEFAULT_VERTICAL = 38;
 
-    const TARGET_RULES = [
+    const DEFAULT_TARGET_RULES = [
         {
             item: '.bili-video-card',
-            title: '.bili-video-card__info--tit a, .bili-video-card__info--tit, .bili-video-card__title',
+            title: '.bili-video-card__info--tit a, .bili-video-card__title',
             media: '.bili-video-card__cover img, .bili-video-card__image--wrap img',
             user: '.bili-video-card__info--author, .bili-video-card__info--author-name, .bili-video-card__author .bili-video-card__text'
-            // TODO space video card author not fully compatible
-            // The full string is "Author · 收藏于xxx"
         },
         {
             item: '.video-page-card-small',
@@ -72,7 +71,7 @@
         },
         {
             item: '.video-card',
-            title: '.title, .description, .video-name, .video-card__title',
+            title: '.title, .video-name, .video-card__title',
             media: '.cover-container .cover, .cover-picture__image, .video-card__cover',
             user: '.up .name, .up-name__text, .video-card__author'
         },
@@ -108,6 +107,10 @@
         allowedUsers: {
             title: 'Allowed Authors',
             description: 'Override other blocks'
+        },
+        targetRules: {
+            title: 'Content Selectors',
+            description: 'Find cards and their content'
         }
     };
 
@@ -135,14 +138,20 @@
         return { source, enabled };
     }
 
+    function cloneDefaultTargetRules() {
+        return DEFAULT_TARGET_RULES.map((rule) => ({ ...rule, enabled: true }));
+    }
+
     function createFreshConfig() {
         return {
             titlePatterns: [],
             blockedUsers: [],
             allowedUsers: [],
+            targetRules: cloneDefaultTargetRules(),
             side: 'right',
             vertical: DEFAULT_VERTICAL,
-            theme: 'light'
+            theme: 'light',
+            debugLogging: false
         };
     }
 
@@ -163,15 +172,33 @@
             .filter((item) => item && item.source.length > 0);
     }
 
+    function normalizeTargetRules(rules) {
+        const source = Array.isArray(rules) ? rules : cloneDefaultTargetRules();
+        return source
+            .map((rule) => {
+                if (!rule || typeof rule !== 'object') return null;
+                return {
+                    item: String(rule.item || '').trim(),
+                    title: String(rule.title || '').trim(),
+                    media: String(rule.media || '').trim(),
+                    user: String(rule.user || '').trim(),
+                    enabled: rule.enabled !== false
+                };
+            })
+            .filter((rule) => rule && rule.item);
+    }
+
     function normalizeConfig(value) {
         const freshConfig = createFreshConfig();
         return {
             titlePatterns: normalizeEntries(value && value.titlePatterns),
             blockedUsers: normalizeEntries(value && value.blockedUsers),
             allowedUsers: normalizeEntries(value && value.allowedUsers),
+            targetRules: normalizeTargetRules(value && value.targetRules),
             side: value && value.side === 'left' ? 'left' : 'right',
             vertical: Math.min(92, Math.max(8, Number(value && value.vertical) || freshConfig.vertical)),
-            theme: value && value.theme === 'dark' ? 'dark' : 'light'
+            theme: value && value.theme === 'dark' ? 'dark' : 'light',
+            debugLogging: value && value.debugLogging === true
         };
     }
 
@@ -210,8 +237,22 @@
             .filter(Boolean);
     }
 
-    function matchesAny(text, expressions) {
-        return expressions.some((expression) => expression.test(text));
+    function matchingExpressions(text, expressions) {
+        return expressions.filter((expression) => expression.test(text));
+    }
+
+    function queryAll(root, selector, context) {
+        if (!selector) return [];
+        try {
+            return [...root.querySelectorAll(selector)];
+        } catch (error) {
+            const warningKey = `${context}:${selector}`;
+            if (!warnedInvalidSelectors.has(warningKey)) {
+                warnedInvalidSelectors.add(warningKey);
+                console.warn(`${DEBUG_PREFIX} invalid selector in ${context}: ${selector}`, error.message);
+            }
+            return [];
+        }
     }
 
     function textFrom(elements) {
@@ -221,9 +262,15 @@
             .join(' ');
     }
 
+    function authorTextFrom(elements) {
+        return [...new Set(elements)]
+            .map((element) => element.textContent.replace(/\s+·\s+收藏于[\s\S]*$/u, '').trim())
+            .filter(Boolean)
+            .join(' ');
+    }
+
     function descendants(item, selector) {
-        if (!selector) return [];
-        return [...item.querySelectorAll(selector)];
+        return queryAll(item, selector, 'content rule');
     }
 
     function queueScan() {
@@ -242,8 +289,9 @@
         const candidates = new Map();
         const desiredBlur = new Map();
 
-        for (const rule of TARGET_RULES) {
-            document.querySelectorAll(rule.item).forEach((item) => {
+        for (const rule of config.targetRules) {
+            if (!rule.enabled) continue;
+            queryAll(document, rule.item, 'item rule').forEach((item) => {
                 if (!candidates.has(item)) candidates.set(item, { titles: [], media: [], users: [] });
                 const candidate = candidates.get(item);
                 candidate.titles.push(...descendants(item, rule.title));
@@ -253,18 +301,27 @@
         }
 
         let blockedCount = 0;
+        const blockedMatches = [];
         for (const [item, candidate] of candidates) {
             const titleText = textFrom(candidate.titles);
-            let userText = textFrom(candidate.users);
+            let userText = authorTextFrom(candidate.users);
             if (!userText && item.closest('.space-main')) {
-                userText = textFrom(document.querySelectorAll('.space-main .upinfo__main .nickname'));
+                userText = authorTextFrom(document.querySelectorAll('.space-main .upinfo__main .nickname'));
             }
 
-            const isAllowed = matchesAny(userText, allowedUserExpressions);
-            const isBlocked = !isAllowed && (matchesAny(titleText, titleExpressions) || matchesAny(userText, blockedUserExpressions));
+            const isAllowed = matchingExpressions(userText, allowedUserExpressions).length > 0;
+            const titleMatches = matchingExpressions(titleText, titleExpressions);
+            const blockedUserMatches = matchingExpressions(userText, blockedUserExpressions);
+            const isBlocked = !isAllowed && (titleMatches.length > 0 || blockedUserMatches.length > 0);
             if (!isBlocked) continue;
 
             blockedCount += 1;
+            titleMatches.forEach((expression) => {
+                blockedMatches.push({ type: 'title', text: titleText, regex: expression.source });
+            });
+            blockedUserMatches.forEach((expression) => {
+                blockedMatches.push({ type: 'author', text: userText, regex: expression.source });
+            });
             const titleTargets = [...new Set(candidate.titles)];
             const mediaTargets = [...new Set(candidate.media)];
             titleTargets.forEach((element) => markBlurTarget(desiredBlur, element, 'title'));
@@ -274,6 +331,11 @@
             }
         }
 
+        if (config.debugLogging && blockedMatches.length) {
+            console.groupCollapsed(`${DEBUG_PREFIX} blocked matches (${blockedMatches.length})`);
+            console.table(blockedMatches);
+            console.groupEnd();
+        }
         updateBlurredElements(desiredBlur);
 
         const countElement = document.querySelector('#bcb-count');
@@ -467,10 +529,110 @@
         return section;
     }
 
+    function validSelector(selector) {
+        if (!selector) return true;
+        try {
+            document.createElement('div').matches(selector);
+            return true;
+        } catch (error) {
+            return false;
+        }
+    }
+
+    function renderSelectorList() {
+        const section = createElement('section', 'bcb-list-section bcb-selector-section');
+        const header = createElement('div', 'bcb-section-heading');
+        header.append(createElement('div', 'bcb-section-title', 'Content Selectors'));
+        header.append(createElement('div', 'bcb-entry-count', `${config.targetRules.length} rules`));
+        section.append(header);
+
+        const list = createElement('div', 'bcb-selector-list');
+        const fields = [
+            ['item', 'Card', 'Card selector'],
+            ['title', 'Title', 'Title selector'],
+            ['media', 'Media', 'Media selector'],
+            ['user', 'Author', 'Author selector']
+        ];
+        config.targetRules.forEach((rule, index) => {
+            const row = createElement('div', 'bcb-selector-row');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = rule.enabled;
+            checkbox.dataset.action = 'toggle-selector';
+            checkbox.dataset.index = String(index);
+            checkbox.title = 'Enable selector rule';
+            row.append(checkbox);
+
+            const fieldList = createElement('div', 'bcb-selector-fields');
+            fields.forEach(([key, label, placeholder]) => {
+                const field = createElement('label', 'bcb-selector-field');
+                field.append(createElement('span', '', label));
+                const input = document.createElement('input');
+                input.type = 'text';
+                input.value = rule[key];
+                input.placeholder = placeholder;
+                input.dataset.action = 'edit-selector';
+                input.dataset.field = key;
+                input.dataset.index = String(index);
+                input.classList.toggle('bcb-invalid', key === 'item' ? !rule[key] || !validSelector(rule[key]) : !validSelector(rule[key]));
+                input.setAttribute('aria-label', `${label} selector ${index + 1}`);
+                field.append(input);
+                fieldList.append(field);
+            });
+            row.append(fieldList);
+
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'bcb-icon-button bcb-remove-entry';
+            remove.dataset.action = 'remove-selector';
+            remove.dataset.index = String(index);
+            remove.title = 'Remove selector rule';
+            remove.setAttribute('aria-label', 'Remove selector rule');
+            remove.innerHTML = ICONS.trash;
+            row.append(remove);
+            list.append(row);
+        });
+        if (!config.targetRules.length) {
+            list.append(createElement('div', 'bcb-empty-list', 'No selector rules'));
+        }
+        section.append(list);
+
+        const addRow = createElement('form', 'bcb-selector-add-row');
+        addRow.dataset.action = 'add-selector';
+        const addFields = createElement('div', 'bcb-selector-add-grid');
+        fields.forEach(([key, label, placeholder]) => {
+            const field = createElement('label', 'bcb-selector-add-field');
+            field.append(createElement('span', '', label));
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.name = key;
+            input.placeholder = placeholder;
+            input.setAttribute('aria-label', `New ${label.toLocaleLowerCase()} selector`);
+            field.append(input);
+            addFields.append(field);
+        });
+        addRow.append(addFields);
+        const addButton = document.createElement('button');
+        addButton.type = 'submit';
+        addButton.className = 'bcb-icon-button bcb-add-entry';
+        addButton.title = 'Add selector rule';
+        addButton.setAttribute('aria-label', 'Add selector rule');
+        addButton.innerHTML = ICONS.plus;
+        addRow.append(addButton);
+        section.append(addRow);
+        return section;
+    }
+
     function renderHome() {
         const listContainer = document.querySelector('#bcb-list-links');
         if (!listContainer) return;
-        listContainer.replaceChildren(...Object.entries(BLOCK_TYPE_META).map(([listName, metadata]) => {
+        const links = [];
+        Object.entries(BLOCK_TYPE_META).forEach(([listName, metadata]) => {
+            if (listName === 'targetRules') {
+                const divider = createElement('div', 'bcb-list-divider');
+                divider.setAttribute('aria-hidden', 'true');
+                links.push(divider);
+            }
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'bcb-list-link';
@@ -488,8 +650,9 @@
             count.textContent = `${enabledCount} active / ${config[listName].length}`;
             button.append(count);
             button.insertAdjacentHTML('beforeend', ICONS.forward);
-            return button;
-        }));
+            links.push(button);
+        });
+        listContainer.replaceChildren(...links);
 
         const countElement = document.querySelector('#bcb-count');
         if (countElement) countElement.textContent = countElement.textContent || '0';
@@ -497,6 +660,7 @@
         document.querySelector('#bcb-side-right').checked = config.side === 'right';
         document.querySelector('#bcb-theme-light').checked = config.theme === 'light';
         document.querySelector('#bcb-theme-dark').checked = config.theme === 'dark';
+        document.querySelector('#bcb-debug-logging').checked = config.debugLogging;
         const range = document.querySelector('#bcb-vertical');
         range.value = String(config.vertical);
         document.querySelector('#bcb-vertical-value').textContent = `${config.vertical}%`;
@@ -511,7 +675,9 @@
         document.querySelector('#bcb-management-title').textContent = metadata.title;
         document.querySelector('#bcb-management-description').textContent = metadata.description;
         document.querySelector('#bcb-management-count').textContent = `${config[activeListName].length} total`;
-        content.replaceChildren(renderPatternList(activeListName, false));
+        content.replaceChildren(activeListName === 'targetRules'
+            ? renderSelectorList()
+            : renderPatternList(activeListName, false));
         resizeEntryInputs(content.querySelector('.bcb-entry-list'));
     }
 
@@ -534,6 +700,19 @@
         }
     }
 
+    function updateSelectorRule(target) {
+        const index = Number(target.dataset.index);
+        const field = target.dataset.field;
+        const rule = config.targetRules[index];
+        if (!rule || !Object.hasOwn(rule, field)) return;
+        rule[field] = target.value.trim();
+        target.classList.toggle('bcb-invalid', field === 'item'
+            ? !rule[field] || !validSelector(rule[field])
+            : !validSelector(rule[field]));
+        saveConfig();
+        queueScan();
+    }
+
     function handlePanelChange(event) {
         const target = event.target;
         const listName = target.dataset.list;
@@ -551,6 +730,11 @@
             saveConfig();
             queueScan();
         }
+        if (target.dataset.action === 'toggle-selector' && config.targetRules[index]) {
+            config.targetRules[index].enabled = target.checked;
+            saveConfig();
+            queueScan();
+        }
         if (target.id === 'bcb-side-left' || target.id === 'bcb-side-right') {
             config.side = target.value;
             saveConfig();
@@ -560,6 +744,10 @@
             config.theme = target.value === 'dark' ? 'dark' : 'light';
             saveConfig();
             document.querySelector('#bcb-shell').dataset.theme = config.theme;
+        }
+        if (target.id === 'bcb-debug-logging') {
+            config.debugLogging = target.checked;
+            saveConfig();
         }
     }
 
@@ -573,6 +761,10 @@
         }
         if (event.target.dataset.action === 'edit-entry') {
             resizeEntryInputs(event.target.closest('.bcb-entry-list'));
+            return;
+        }
+        if (event.target.dataset.action === 'edit-selector') {
+            updateSelectorRule(event.target);
             return;
         }
         if (event.target.id !== 'bcb-vertical') return;
@@ -597,6 +789,12 @@
         if (action === 'back-home') {
             activeListName = null;
             renderPanel();
+        }
+        if (action === 'remove-selector') {
+            config.targetRules.splice(Number(actionTarget.dataset.index), 1);
+            saveConfig();
+            renderPanel();
+            queueScan();
         }
         if (action === 'remove-entry') {
             const list = config[actionTarget.dataset.list];
@@ -656,9 +854,29 @@
     }
 
     function handleAdd(event) {
-        const form = event.target.closest('form[data-action="add-entry"]');
+        const form = event.target.closest('form[data-action]');
         if (!form) return;
         event.preventDefault();
+        if (form.dataset.action === 'add-selector') {
+            const fields = ['item', 'title', 'media', 'user'];
+            const rule = Object.fromEntries(fields.map((field) => [
+                field,
+                form.querySelector(`[name="${field}"]`).value.trim()
+            ]));
+            const invalidField = fields.find((field) => field === 'item'
+                ? !rule[field] || !validSelector(rule[field])
+                : !validSelector(rule[field]));
+            if (invalidField) {
+                form.querySelector(`[name="${invalidField}"]`).classList.add('bcb-invalid');
+                return;
+            }
+            config.targetRules.push({ ...rule, enabled: true });
+            saveConfig();
+            renderPanel();
+            queueScan();
+            return;
+        }
+        if (form.dataset.action !== 'add-entry') return;
         const input = form.querySelector('input');
         const source = stripRegexLiteral(input.value.trim());
         if (!source || !validSource(source)) {
@@ -703,6 +921,7 @@
                                 <label><input id="bcb-theme-light" type="radio" name="bcb-theme" value="light"><span>Light+</span></label>
                                 <label><input id="bcb-theme-dark" type="radio" name="bcb-theme" value="dark"><span>Dark+</span></label>
                             </div>
+                            <label class="bcb-debug-control"><input id="bcb-debug-logging" type="checkbox"><span>Log blocked text and matched regexes</span></label>
                         </section>
                     </div>
                     <div id="bcb-management-view" hidden>
@@ -809,6 +1028,7 @@
                 --bcb-danger-surface: #3a1d1d;
                 color-scheme: dark;
             }
+            #bcb-shell [hidden] { display: none !important; }
             #bcb-toggle {
                 position: fixed;
                 top: var(--bcb-vertical);
@@ -856,6 +1076,7 @@
             .bcb-status { display: flex; align-items: center; justify-content: space-between; color: var(--bcb-muted); font-size: 12px; padding-bottom: 13px; border-bottom: 1px solid var(--bcb-line); }
             .bcb-status strong { color: var(--bcb-ink); font-size: 16px; }
             #bcb-list-links { display: grid; gap: 8px; padding: 15px 0; }
+            .bcb-list-divider { height: 1px; margin: 9px 0 2px; background: var(--bcb-line); }
             .bcb-list-link { width: 100%; min-height: 58px; padding: 10px 11px 10px 13px; display: flex; align-items: center; gap: 10px; border: 1px solid var(--bcb-line); border-radius: 6px; background: var(--bcb-surface); color: var(--bcb-ink); text-align: left; cursor: pointer; }
             .bcb-list-link:hover { border-color: var(--bcb-accent); background: var(--bcb-surface-hover); }
             .bcb-list-link-text { min-width: 0; flex: 1; display: grid; gap: 3px; }
@@ -899,11 +1120,25 @@
             .bcb-add-row { margin-top: 8px; }
             .bcb-add-entry { border: 1px solid var(--bcb-line); background: var(--bcb-surface); color: var(--bcb-accent); }
             .bcb-add-entry:hover { border-color: var(--bcb-accent); background: var(--bcb-surface-hover); }
+            .bcb-selector-list { display: grid; gap: 8px; }
+            .bcb-selector-row { display: grid; grid-template-columns: 15px minmax(0, 1fr) 30px; gap: 8px; align-items: start; padding: 8px 0; border-bottom: 1px solid var(--bcb-line); }
+            .bcb-selector-row > input { width: 15px; height: 15px; margin: 4px 0 0; accent-color: var(--bcb-accent); }
+            .bcb-selector-fields, .bcb-selector-add-grid { display: grid; gap: 5px; min-width: 0; }
+            .bcb-selector-field, .bcb-selector-add-field { display: grid; grid-template-columns: 52px minmax(0, 1fr); gap: 7px; align-items: center; min-width: 0; }
+            .bcb-selector-field > span, .bcb-selector-add-field > span { color: var(--bcb-muted); font-size: 10px; }
+            .bcb-selector-field input, .bcb-selector-add-field input { min-width: 0; width: 100%; height: 27px; padding: 4px 7px; border: 1px solid var(--bcb-line); border-radius: 5px; color: var(--bcb-ink); background: var(--bcb-surface); font: 11px/1.2 Consolas, "Microsoft YaHei", monospace; }
+            .bcb-selector-field input:focus, .bcb-selector-add-field input:focus { outline: 2px solid var(--bcb-focus); border-color: var(--bcb-accent); }
+            .bcb-selector-field input.bcb-invalid, .bcb-selector-add-field input.bcb-invalid { border-color: var(--bcb-danger); background: var(--bcb-danger-surface); }
+            .bcb-selector-add-row { display: grid; gap: 8px; margin-top: 10px; }
+            .bcb-selector-add-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .bcb-selector-add-row > .bcb-icon-button { justify-self: end; }
             .bcb-side-control { display: flex; gap: 8px; margin-bottom: 15px; }
             .bcb-side-control label { flex: 1; cursor: pointer; }
             .bcb-side-control input { position: absolute; opacity: 0; pointer-events: none; }
             .bcb-side-control span { display: block; border: 1px solid var(--bcb-line); border-radius: 5px; padding: 8px; text-align: center; color: var(--bcb-muted); font-size: 12px; background: var(--bcb-surface); }
             .bcb-side-control input:checked + span { color: var(--bcb-ink); border-color: var(--bcb-accent); box-shadow: inset 0 -2px 0 var(--bcb-accent); }
+            .bcb-debug-control { display: flex; align-items: center; gap: 8px; color: var(--bcb-muted); font-size: 12px; cursor: pointer; }
+            .bcb-debug-control input { width: 15px; height: 15px; margin: 0; accent-color: var(--bcb-accent); }
             .bcb-range-label { display: flex; justify-content: space-between; color: var(--bcb-muted); font-size: 12px; margin-bottom: 7px; }
             .bcb-range-label output { color: var(--bcb-ink); font-variant-numeric: tabular-nums; }
             #bcb-vertical { display: block; width: 100%; accent-color: var(--bcb-accent); cursor: pointer; }
@@ -916,6 +1151,7 @@
                 .bcb-section-description { text-align: left; }
                 .bcb-management-header { align-items: flex-start; }
                 .bcb-management-count { padding-top: 2px; }
+                .bcb-selector-add-grid { grid-template-columns: 1fr; }
             }
         `);
         runtimeState.stylesAdded = true;
@@ -950,6 +1186,7 @@
                 titleEntries: config.titlePatterns.length,
                 blockedUserEntries: config.blockedUsers.length,
                 allowedUserEntries: config.allowedUsers.length,
+                selectorRules: config.targetRules.length,
                 side: config.side,
                 vertical: config.vertical,
                 theme: config.theme

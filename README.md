@@ -26,13 +26,16 @@ The script runs on BiliBili HTTP and HTTPS pages, excluding mobile, API, live, m
 
 ## Configuration
 
-The settings panel provides three rule lists:
+The settings panel provides three matching lists and a selector list:
 
 - **Title Patterns**: regular expressions matched against video and post text.
 - **Blocked Authors**: regular expressions matched against author names.
 - **Allowed Authors**: regular expressions that override other matches for the same content.
+- **Content Selectors**: CSS selectors for the card, title, media, and author elements used by the scanner.
 
-Each entry can be enabled or disabled, edited, filtered, reordered by dragging, or removed. New entries are validated as JavaScript regular expressions before they are saved. Matching is case-insensitive and Unicode-aware.
+Pattern entries can be enabled or disabled, edited, filtered, reordered by dragging, or removed. New pattern entries are validated as JavaScript regular expressions before they are saved. Matching is case-insensitive and Unicode-aware. Selector rules can be enabled, edited, added, or removed.
+
+Selector rules are stored in the same userscript configuration. If BiliBili changes its markup, update the affected CSS selectors in **Content Selectors** instead of modifying or reinstalling the script. The card selector is required; title, media, and author selectors may be left empty when that content is unavailable.
 
 Configuration is saved by the userscript manager under the key `bilibili-content-blur:v2`.
 
@@ -40,4 +43,4 @@ Configuration is saved by the userscript manager under the key `bilibili-content
 
 - Blurred media is revealed while hovered.
 - Invalid regular expressions are marked in the settings panel and reported in the browser console.
-- The script uses BiliBili page selectors, so site markup changes may require selector updates.
+- Invalid CSS selectors are marked in the settings panel and skipped during scanning until corrected.
