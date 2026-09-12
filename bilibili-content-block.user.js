@@ -5,6 +5,7 @@
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
 // @license      MIT
+// @icon         https://static.hdslb.com/images/favicon.ico
 // @match        https://*.bilibili.com/*
 // @match        https://bilibili.com/*
 // @match        http://*.bilibili.com/*
