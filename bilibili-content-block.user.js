@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         BiliBili Content Block
 // @namespace    https://github.com/PriceHu/bilibili-content-block
-// @version      1.2.0
+// @version      1.2.1
 // @description  Blur Bilibili content matched by configurable title and author regex entries.
 // @author       PriceHu
 // @license      MIT
@@ -977,7 +977,9 @@
             }
             .bcb-blurred-title {
                 filter: blur(8px) !important;
-                // clip-path: inset(-6px -8px);
+            }
+            .bili-video-card__info--no-interest {
+                z-index: 1 !important;
             }
             .bcb-blurred-fallback {
                 clip-path: inset(0);
