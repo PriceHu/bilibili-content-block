@@ -53,7 +53,7 @@
     const DEFAULT_TARGET_RULES = [
         {
             item: '.bili-video-card',
-            title: '.bili-video-card__info--tit a, .bili-video-card__title',
+            title: '.bili-video-card__info--tit, .bili-video-card__title',
             media: '.bili-video-card__cover img, .bili-video-card__image--wrap img',
             user: '.bili-video-card__info--author, .bili-video-card__info--author-name, .bili-video-card__author .bili-video-card__text'
         },
